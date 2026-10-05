@@ -31,8 +31,11 @@ services:
       PENNKEY_PASSWORD_FILE: /run/secrets/pennkey_password
       MCP_API_KEY_FILE: /run/secrets/mcp_api_key
       DUO_FACTOR: push
-      # Optional: get told when a Duo Push is waiting (Slack/Discord/ntfy URL)
-      # AUTH_NOTIFY_WEBHOOK_URL: https://ntfy.sh/your-private-topic
+      # Optional: get the Duo code / login failures as a push notification.
+      # Set it in a .env file next to this compose file (git-ignored), e.g.
+      # AUTH_NOTIFY_WEBHOOK_URL=https://api.day.app/<bark-device-key>   (Bark)
+      # AUTH_NOTIFY_WEBHOOK_URL=https://ntfy.sh/<private-topic>         (ntfy)
+      AUTH_NOTIFY_WEBHOOK_URL: ${AUTH_NOTIFY_WEBHOOK_URL:-}
     secrets:
       - pennkey_username
       - pennkey_password

@@ -107,7 +107,7 @@ canvas-mcp-server --config    # shows auth mode and whether a session is saved
 | `PENNKEY_USER_AGENT` | regular Chrome UA | Override the login browser's user-agent string |
 | `PENNKEY_DEBUG` | `false` | Save a screenshot (and Duo page HTML) at every Duo step |
 | `PENNKEY_LOGIN_COOLDOWN_SEC` | `900` | Pause after a failed login |
-| `AUTH_NOTIFY_WEBHOOK_URL` / `_FILE` | | Optional ping when a push is waiting or login fails |
+| `AUTH_NOTIFY_WEBHOOK_URL` / `_FILE` | | Optional push when a Duo code is waiting or login fails. `https://api.day.app/<device-key>` sends via Bark; other URLs get JSON `{text, content}` (Slack/Discord/ntfy) |
 | `MCP_API_KEY` / `_FILE` | | API key required for HTTP transport (`MCP_HTTP_AUTH_TOKEN` also accepted) |
 
 ## Troubleshooting

@@ -241,11 +241,32 @@ class SessionManager:
         if not url:
             return
         try:
-            # "text" is read by Slack/Teams-style hooks, "content" by Discord;
-            # ntfy.sh shows the raw body.
-            httpx.post(url, json={"text": message, "content": message}, timeout=10)
+            if _is_bark(url):
+                # Bark (iOS push): POST JSON to https://api.day.app/<device_key>.
+                # timeSensitive lets Duo codes break through Focus modes.
+                httpx.post(
+                    url.split("?", 1)[0].rstrip("/"),
+                    json={
+                        "title": "Canvas MCP",
+                        "body": message.removeprefix("Canvas MCP: "),
+                        "group": "canvas-mcp",
+                        "level": "timeSensitive",
+                    },
+                    timeout=10,
+                )
+            else:
+                # "text" is read by Slack/Teams-style hooks, "content" by Discord;
+                # ntfy.sh shows the raw body.
+                httpx.post(url, json={"text": message, "content": message}, timeout=10)
         except httpx.HTTPError as e:
             log_warning("Auth notification webhook failed", error_type=type(e).__name__)
+
+
+def _is_bark(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    host = urlsplit(url).netloc.lower()
+    return host == "api.day.app" or host.endswith(".day.app")
 
 
 _manager: SessionManager | None = None
