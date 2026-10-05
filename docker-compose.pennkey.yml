@@ -1,13 +1,14 @@
-# Canvas MCP with automated PennKey + Duo token retrieval.
+# Canvas MCP with automated PennKey + Duo sign-in (web-session auth).
 #
 #   mkdir -p secrets && printf '%s' 'your-pennkey' > secrets/pennkey_username \
 #     && printf '%s' 'your-password' > secrets/pennkey_password \
 #     && openssl rand -hex 32 > secrets/mcp_http_auth_token
 #   docker compose -f docker-compose.pennkey.yml up -d --build
-#   docker compose -f docker-compose.pennkey.yml logs -f   # approve the Duo Push when it arrives
+#   docker compose -f docker-compose.pennkey.yml logs -f   # shows the Duo code to enter
 #
-# The token and browser cookies are kept in the canvas-auth volume, so restarts
-# reuse them and Duo is only needed again if the token can't be rotated.
+# The Canvas session and browser cookies (incl. Duo "remember this device")
+# are kept in the canvas-auth volume, so restarts reuse them and re-login is
+# usually prompt-free.
 services:
   canvas-mcp:
     build:

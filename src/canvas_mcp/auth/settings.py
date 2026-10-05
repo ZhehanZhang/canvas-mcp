@@ -1,4 +1,4 @@
-"""Settings for automated (headless) Canvas token retrieval.
+"""Settings for automated (headless) Canvas web-session login (PennKey + Duo).
 
 Everything is read from environment variables. Secrets can be supplied either
 directly (``PENNKEY_PASSWORD``) or via a file path (``PENNKEY_PASSWORD_FILE``),
@@ -64,8 +64,6 @@ class AuthSettings:
     api_url: str
     login_path: str
     state_dir: Path
-    token_lifetime_days: int
-    refresh_margin_hours: int
     refresh_check_interval_sec: int
     duo_factor: str
     duo_passcode: str
@@ -76,7 +74,6 @@ class AuthSettings:
     login_cooldown_sec: int
     notify_webhook_url: str
     headless: bool
-    token_purpose: str
     debug: bool = False
 
     @property
@@ -90,8 +87,8 @@ class AuthSettings:
         return urlsplit(self.api_url).netloc.lower()
 
     @property
-    def token_file(self) -> Path:
-        return self.state_dir / "canvas_token.json"
+    def session_file(self) -> Path:
+        return self.state_dir / "canvas_session.json"
 
     @property
     def browser_state_file(self) -> Path:
@@ -113,15 +110,9 @@ class AuthSettings:
                 f"DUO_FACTOR must be one of {', '.join(sorted(VALID_DUO_FACTORS))} (got '{duo_factor}')"
             )
 
-        lifetime = _int("CANVAS_TOKEN_LIFETIME_DAYS", 90)
-        # Canvas caps student-created tokens at 120 days.
-        if not 1 <= lifetime <= 120:
-            raise AuthConfigError("CANVAS_TOKEN_LIFETIME_DAYS must be between 1 and 120")
-        margin = _int("CANVAS_TOKEN_REFRESH_MARGIN_HOURS", 72)
-        if margin < 1 or margin >= lifetime * 24:
-            raise AuthConfigError(
-                "CANVAS_TOKEN_REFRESH_MARGIN_HOURS must be at least 1 and shorter than the token lifetime"
-            )
+        check_interval = _int("CANVAS_SESSION_CHECK_SEC", 900)
+        if check_interval < 60:
+            raise AuthConfigError("CANVAS_SESSION_CHECK_SEC must be at least 60")
 
         default_state = Path(os.getenv("HOME", ".")) / ".canvas-mcp"
         state_dir = Path(os.getenv("CANVAS_AUTH_STATE_DIR", "").strip() or default_state)
@@ -136,9 +127,7 @@ class AuthSettings:
             api_url=api_url.rstrip("/"),
             login_path=login_path,
             state_dir=state_dir,
-            token_lifetime_days=lifetime,
-            refresh_margin_hours=margin,
-            refresh_check_interval_sec=_int("CANVAS_TOKEN_REFRESH_CHECK_SEC", 3600),
+            refresh_check_interval_sec=check_interval,
             duo_factor=duo_factor,
             duo_passcode=read_secret("DUO_PASSCODE"),
             duo_timeout_sec=_int("DUO_TIMEOUT_SEC", 90),
@@ -148,8 +137,6 @@ class AuthSettings:
             login_cooldown_sec=_int("PENNKEY_LOGIN_COOLDOWN_SEC", 900),
             notify_webhook_url=read_secret("AUTH_NOTIFY_WEBHOOK_URL"),
             headless=_bool("PENNKEY_HEADLESS", True),
-            token_purpose=os.getenv("CANVAS_TOKEN_PURPOSE", "canvas-mcp (automated)").strip()
-            or "canvas-mcp (automated)",
             debug=_bool("PENNKEY_DEBUG", False),
         )
 
