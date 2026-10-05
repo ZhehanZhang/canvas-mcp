@@ -373,3 +373,28 @@ async def test_session_auth_captures_set_cookie(tmp_path):
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=SessionAuth(mgr)) as c:
         await c.get("https://canvas.example.edu/api/v1/courses")
     assert "_normandy_session=v2" in mgr.current.cookie_header()
+
+
+def test_notify_bark_posts_title_and_body(tmp_path, monkeypatch):
+    sent = {}
+
+    def fake_post(url, json=None, timeout=None):
+        sent["url"], sent["json"] = url, json
+
+    monkeypatch.setattr(manager_module.httpx, "post", fake_post)
+    settings = make_settings(tmp_path, notify_webhook_url="https://api.day.app/DEVKEY/?group=x")
+    SessionManager(settings, login_runner=FakeLogin()).notify("Canvas MCP: Enter code 123")
+    assert sent["url"] == "https://api.day.app/DEVKEY"
+    assert sent["json"]["body"] == "Enter code 123"
+    assert sent["json"]["group"] == "canvas-mcp"
+
+
+def test_notify_generic_webhook(tmp_path, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        manager_module.httpx, "post",
+        lambda url, json=None, timeout=None: sent.update(url=url, json=json),
+    )
+    settings = make_settings(tmp_path, notify_webhook_url="https://ntfy.sh/topic")
+    SessionManager(settings, login_runner=FakeLogin()).notify("hello")
+    assert sent["json"] == {"text": "hello", "content": "hello"}
