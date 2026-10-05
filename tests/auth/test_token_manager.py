@@ -337,3 +337,15 @@ async def test_managed_auth_passes_through_permission_401(tmp_path, monkeypatch)
         response = await client.get("https://canvas.example.edu/api/v1/accounts")
     assert response.status_code == 401
     assert len(calls) == 1
+
+
+def test_on_notify_receives_login_messages(tmp_path):
+    seen = []
+
+    def login(settings, notify):
+        notify("Enter code 123 in Duo Mobile")
+        return tok("fresh")
+
+    mgr = TokenManager(make_settings(tmp_path), login_runner=login, on_notify=seen.append)
+    mgr.ensure_valid_token()
+    assert seen == ["Enter code 123 in Duo Mobile"]

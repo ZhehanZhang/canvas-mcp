@@ -77,6 +77,7 @@ class AuthSettings:
     notify_webhook_url: str
     headless: bool
     token_purpose: str
+    debug: bool = False
 
     @property
     def base_url(self) -> str:
@@ -149,6 +150,7 @@ class AuthSettings:
             headless=_bool("PENNKEY_HEADLESS", True),
             token_purpose=os.getenv("CANVAS_TOKEN_PURPOSE", "canvas-mcp (automated)").strip()
             or "canvas-mcp (automated)",
+            debug=_bool("PENNKEY_DEBUG", False),
         )
 
     def require_credentials(self) -> None:

@@ -8,7 +8,11 @@ that token itself, which makes it usable in a container on a server.
 
 1. **First start:** a headless Chromium opens `https://canvas.upenn.edu/login/saml`,
    signs in to Penn WebLogin with your PennKey, and triggers **Duo Push**.
-   You approve the push on your phone. Nothing bypasses or auto-approves Duo.
+   If your account defaults to a security key, it switches to Duo Push via
+   "Other options" (a server has no security key). With Duo Verified Push,
+   the code to type into Duo Mobile is printed in the log, in the `--login`
+   terminal, and in the notification webhook. You approve the push on your
+   phone. Nothing bypasses or auto-approves Duo.
 2. With the resulting Canvas session, the server creates a personal access
    token (`POST /api/v1/users/self/tokens`, default 90-day expiry) and saves it
    to `CANVAS_AUTH_STATE_DIR/canvas_token.json` (mode 0600).
@@ -80,12 +84,16 @@ canvas-mcp-server --config    # shows auth mode and token expiry
 | `DUO_TIMEOUT_SEC` | `90` | Wait per push |
 | `DUO_MAX_PUSH_ATTEMPTS` | `2` | Pushes per login before giving up |
 | `DUO_TRUST_BROWSER` | `true` | Answer "Yes, this is my device" |
+| `PENNKEY_DEBUG` | `false` | Save a screenshot (and Duo page HTML) at every Duo step |
 | `PENNKEY_LOGIN_COOLDOWN_SEC` | `900` | Pause after a failed login |
 | `AUTH_NOTIFY_WEBHOOK_URL` / `_FILE` | | Optional ping when a push is waiting or login fails |
 | `MCP_HTTP_AUTH_TOKEN` / `_FILE` | | Bearer key required for HTTP transport |
 
 ## Troubleshooting
 
+- After Duo, the browser answers "Yes, this is my device" and saves its
+  cookies to `browser_state.json` immediately, so later logins can skip Duo
+  for as long as Penn's Duo policy remembers the device.
 - On a failed login, a screenshot is saved to `CANVAS_AUTH_STATE_DIR/debug/`.
   No page HTML is saved, since it could contain credentials.
 - "Canvas refused to create an access token" means your Canvas account isn't
