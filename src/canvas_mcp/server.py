@@ -101,11 +101,16 @@ class CanvasCredentialMiddleware:
             await self.app(scope, receive, send)
 
     def _authorized(self, headers: dict) -> bool:
+        """Accept the API key as ``Authorization: Bearer <key>`` or ``X-API-Key: <key>``."""
+        expected = self.access_key.encode()
+        api_key = headers.get(b"x-api-key", b"").strip()
+        if api_key and hmac.compare_digest(api_key, expected):
+            return True
         presented = headers.get(b"authorization", b"").decode()
         scheme, _, value = presented.partition(" ")
         if scheme.lower() != "bearer":
             return False
-        return hmac.compare_digest(value.strip().encode(), self.access_key.encode())
+        return hmac.compare_digest(value.strip().encode(), expected)
 
 
 def create_server(
@@ -409,14 +414,15 @@ def main() -> None:
 
     from .auth.settings import read_secret
 
-    http_access_key = read_secret("MCP_HTTP_AUTH_TOKEN").strip()
+    # MCP_API_KEY and MCP_HTTP_AUTH_TOKEN are equivalent names for the HTTP API key.
+    http_access_key = (read_secret("MCP_API_KEY") or read_secret("MCP_HTTP_AUTH_TOKEN")).strip()
     if is_http and auto_auth and not http_access_key:
         allow_open = os.getenv("MCP_HTTP_ALLOW_UNAUTHENTICATED", "").lower() == "true"
         if not allow_open:
             log_error(
                 "Refusing to serve HTTP with a server-managed PennKey session and no "
-                "MCP_HTTP_AUTH_TOKEN: anyone reaching the port could act as you in Canvas. "
-                "Set MCP_HTTP_AUTH_TOKEN (clients send 'Authorization: Bearer <value>')."
+                "API key: anyone reaching the port could act as you in Canvas. "
+                "Set MCP_API_KEY (clients send 'Authorization: Bearer <key>' or 'X-API-Key: <key>')."
             )
             sys.exit(1)
         log_warning("MCP_HTTP_ALLOW_UNAUTHENTICATED=true: HTTP endpoint has no access control")
@@ -428,6 +434,10 @@ def main() -> None:
     if is_http:
         log_info(
             f"Starting Canvas MCP server in HTTP mode on {args.host}:{args.port}"
+        )
+        log_info(
+            f"MCP endpoint: http://{args.host}:{args.port}/mcp "
+            + ("(API key required)" if http_access_key else "(no API key)")
         )
         if auto_auth:
             log_info(

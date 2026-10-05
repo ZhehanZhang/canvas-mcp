@@ -2,9 +2,15 @@
 #
 #   mkdir -p secrets && printf '%s' 'your-pennkey' > secrets/pennkey_username \
 #     && printf '%s' 'your-password' > secrets/pennkey_password \
-#     && openssl rand -hex 32 > secrets/mcp_http_auth_token
+#     && openssl rand -hex 32 > secrets/mcp_api_key
 #   docker compose -f docker-compose.pennkey.yml up -d --build
 #   docker compose -f docker-compose.pennkey.yml logs -f   # shows the Duo code to enter
+#
+# MCP endpoint: http://<bind address>:8819/mcp, API key required as
+# "Authorization: Bearer <key>" or "X-API-Key: <key>". TLS is expected to be
+# terminated by your own reverse proxy. By default the port is published on
+# 127.0.0.1 only; set MCP_BIND_ADDRESS=0.0.0.0 if the proxy runs on another
+# host, and MCP_PORT to change the host port.
 #
 # The Canvas session and browser cookies (incl. Duo "remember this device")
 # are kept in the canvas-auth volume, so restarts reuse them and re-login is
@@ -17,20 +23,20 @@ services:
         WITH_PENNKEY_AUTH: "true"
     command: ["canvas-mcp-server", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8819"]
     ports:
-      - "127.0.0.1:8819:8819"
+      - "${MCP_BIND_ADDRESS:-127.0.0.1}:${MCP_PORT:-8819}:8819"
     environment:
       CANVAS_AUTH_MODE: pennkey
       CANVAS_API_URL: https://canvas.upenn.edu/api/v1
       PENNKEY_USERNAME_FILE: /run/secrets/pennkey_username
       PENNKEY_PASSWORD_FILE: /run/secrets/pennkey_password
-      MCP_HTTP_AUTH_TOKEN_FILE: /run/secrets/mcp_http_auth_token
+      MCP_API_KEY_FILE: /run/secrets/mcp_api_key
       DUO_FACTOR: push
       # Optional: get told when a Duo Push is waiting (Slack/Discord/ntfy URL)
       # AUTH_NOTIFY_WEBHOOK_URL: https://ntfy.sh/your-private-topic
     secrets:
       - pennkey_username
       - pennkey_password
-      - mcp_http_auth_token
+      - mcp_api_key
     volumes:
       - canvas-auth:/data
     restart: unless-stopped
@@ -40,8 +46,8 @@ secrets:
     file: ./secrets/pennkey_username
   pennkey_password:
     file: ./secrets/pennkey_password
-  mcp_http_auth_token:
-    file: ./secrets/mcp_http_auth_token
+  mcp_api_key:
+    file: ./secrets/mcp_api_key
 
 volumes:
   canvas-auth:

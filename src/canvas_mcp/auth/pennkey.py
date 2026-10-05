@@ -125,6 +125,15 @@ def _first_visible(page: "Page", selectors: list[str]) -> Any:
     return None
 
 
+def chrome_user_agent(browser_version: str) -> str:
+    """A regular desktop Chrome user agent for the bundled Chromium version."""
+    major = browser_version.split(".", 1)[0] or "141"
+    return (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        f"Chrome/{major}.0.0.0 Safari/537.36"
+    )
+
+
 def _host(url: str) -> str:
     return urlsplit(url).netloc.lower()
 
@@ -151,7 +160,11 @@ class PennKeyLogin:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=self.settings.headless)
             try:
-                context_kwargs: dict[str, Any] = {}
+                # Headless Chromium reports itself as "HeadlessChrome", which Duo
+                # may treat as an unsupported browser. Present as regular Chrome.
+                context_kwargs: dict[str, Any] = {
+                    "user_agent": self.settings.user_agent or chrome_user_agent(browser.version),
+                }
                 if self.settings.browser_state_file.exists():
                     context_kwargs["storage_state"] = str(self.settings.browser_state_file)
                 context = browser.new_context(**context_kwargs)
