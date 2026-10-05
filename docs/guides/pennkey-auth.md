@@ -53,6 +53,9 @@ mkdir -p secrets
 printf '%s' 'your-pennkey'  > secrets/pennkey_username
 printf '%s' 'your-password' > secrets/pennkey_password
 openssl rand -hex 32        > secrets/mcp_api_key
+# The container runs as a non-root user and Compose mounts secret files with
+# their host owner/mode: make the files readable, keep the folder private.
+chmod 700 secrets && chmod 644 secrets/*
 docker compose -f docker-compose.pennkey.yml up -d --build
 docker compose -f docker-compose.pennkey.yml logs -f   # shows the Duo code to enter
 ```
