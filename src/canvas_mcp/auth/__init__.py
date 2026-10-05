@@ -1,10 +1,10 @@
-"""Automated Canvas token retrieval (PennKey + Duo) for headless servers."""
+"""Automated Canvas web-session auth (PennKey + Duo) for headless servers."""
 
 from .manager import (
-    TokenManager,
-    get_token_manager,
+    SessionManager,
+    get_session_manager,
     is_auto_auth_enabled,
-    reset_token_manager,
+    reset_session_manager,
 )
 from .pennkey import BadCredentialsError, DuoError, LoginError
 from .settings import AuthConfigError, AuthSettings, get_auth_mode
@@ -15,9 +15,9 @@ __all__ = [
     "BadCredentialsError",
     "DuoError",
     "LoginError",
-    "TokenManager",
+    "SessionManager",
     "get_auth_mode",
-    "get_token_manager",
+    "get_session_manager",
     "is_auto_auth_enabled",
-    "reset_token_manager",
+    "reset_session_manager",
 ]

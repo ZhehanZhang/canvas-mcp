@@ -23,14 +23,13 @@ import json
 import re
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 from ..core.logging import log_info, log_warning
-from .canvas_tokens import expiry_iso, strip_json_prefix
+from .session import CanvasSession
 from .settings import AuthSettings
-from .token_store import StoredToken, write_private_file
+from .token_store import write_private_file
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright.sync_api import BrowserContext, Page
@@ -139,7 +138,7 @@ class PennKeyLogin:
 
     # -- public ---------------------------------------------------------------
 
-    def run(self) -> StoredToken:
+    def run(self) -> CanvasSession:
         self.settings.require_credentials()
         try:
             from playwright.sync_api import sync_playwright
@@ -162,11 +161,11 @@ class PennKeyLogin:
                 try:
                     self._login(page)
                     self._save_browser_state(context)
-                    token = self._create_token(context)
+                    session = self._capture_session(context)
                 except Exception:
                     self._save_debug(page)
                     raise
-                return token
+                return session
             finally:
                 browser.close()
 
@@ -422,30 +421,17 @@ class PennKeyLogin:
             self._debug_snapshot(page, "duo-stuck")
             raise DuoError("Duo did not finish after approval")
 
-    def _create_token(self, context: "BrowserContext") -> StoredToken:
-        s = self.settings
-        cookies = {c["name"]: c["value"] for c in context.cookies(s.base_url)}
-        csrf = unquote(cookies.get("_csrf_token", ""))
-        if not csrf:
-            raise LoginError("Canvas session has no CSRF token; login did not complete")
-        response = context.request.post(
-            f"{s.api_url}/users/self/tokens",
-            form={
-                "token[purpose]": f"{s.token_purpose} {datetime.now(timezone.utc):%Y-%m-%d}",
-                "token[expires_at]": expiry_iso(s.token_lifetime_days),
-            },
-            headers={"X-CSRF-Token": csrf, "Accept": "application/json"},
-        )
-        body = strip_json_prefix(response.text())
-        if not response.ok:
+    def _capture_session(self, context: "BrowserContext") -> CanvasSession:
+        """Pull the logged-in Canvas cookies out of the browser context."""
+        cookies = [dict(c) for c in context.cookies(self.settings.base_url)]
+        session = CanvasSession.from_cookies(cookies)
+        if not session.is_usable():
             raise LoginError(
-                f"Canvas refused to create an access token (HTTP {response.status}): "
-                f"{body[:300]}. Your Canvas account may not be allowed to create "
-                "personal access tokens."
+                "Login finished but no Canvas session cookie was found; "
+                "the session could not be captured"
             )
-        token = StoredToken.from_api(json.loads(body))
-        log_info("PennKey login: created a new Canvas access token", token_id=token.token_id)
-        return token
+        log_info("PennKey login: captured Canvas web session")
+        return session
 
     # -- state ----------------------------------------------------------------
 

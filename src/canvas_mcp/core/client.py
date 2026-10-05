@@ -111,6 +111,20 @@ def _should_anonymize_endpoint(endpoint: str) -> bool:
     return any(student_endpoint in endpoint_lower for student_endpoint in student_data_endpoints)
 
 
+def _parse_json(response: httpx.Response) -> Any:
+    """Parse a Canvas JSON response.
+
+    Canvas prefixes JSON with ``while(1);`` on cookie-authenticated (web
+    session) requests to block JSON hijacking; strip it before parsing.
+    """
+    text = response.text
+    if text.startswith("while(1);"):
+        import json
+
+        return json.loads(text[len("while(1);"):])
+    return response.json()
+
+
 def _get_http_client() -> httpx.AsyncClient:
     """Get or create the HTTP client with current configuration.
 
@@ -140,18 +154,19 @@ def _get_http_client() -> httpx.AsyncClient:
 
     if http_client is None:
         from .. import __version__
-        from ..auth import get_token_manager
+        from ..auth import get_session_manager
         from .config import get_config
         config = get_config()
         headers = {
             'User-Agent': f'canvas-mcp/{__version__} (https://github.com/vishalsachdev/canvas-mcp)'
         }
-        manager = get_token_manager()
+        manager = get_session_manager()
         if manager is not None:
-            # CANVAS_AUTH_MODE=pennkey: token is obtained/rotated automatically
-            from ..auth.httpx_auth import ManagedTokenAuth
+            # CANVAS_AUTH_MODE=pennkey: authenticate with the PennKey web session's
+            # cookies (Penn accounts can't create access tokens); re-login on expiry
+            from ..auth.httpx_auth import SessionAuth
             http_client = httpx.AsyncClient(
-                headers=headers, auth=ManagedTokenAuth(manager), timeout=config.api_timeout
+                headers=headers, auth=SessionAuth(manager), timeout=config.api_timeout
             )
         else:
             headers['Authorization'] = f'Bearer {config.api_token}'
@@ -269,7 +284,7 @@ async def make_canvas_request(
                         return {"error": f"Unsupported method: {method}"}
 
                     response.raise_for_status()
-                    result = response.json()
+                    result = _parse_json(response)
 
                     # Apply anonymization if enabled and this endpoint contains student data
                     # Skip if explicitly requested (e.g., from paginated fetcher that will anonymize the full result)
@@ -306,7 +321,7 @@ async def make_canvas_request(
                     # Not a rate limit error or out of retries - format and return error
                     error_message = f"HTTP error: {e.response.status_code}"
                     try:
-                        error_details = e.response.json()
+                        error_details = _parse_json(e.response)
                         error_message += f", Details: {error_details}"
                     except ValueError:
                         error_details = e.response.text
@@ -421,12 +436,12 @@ async def upload_file_to_storage(
                         ) as canvas_client:
                             confirm_response = await canvas_client.get(redirect_url)
                             confirm_response.raise_for_status()
-                            return confirm_response.json()
+                            return _parse_json(confirm_response)
                     else:
                         canvas_client = _get_http_client()
                         confirm_response = await canvas_client.get(redirect_url)
                         confirm_response.raise_for_status()
-                        return confirm_response.json()
+                        return _parse_json(confirm_response)
                 else:
                     return {"error": "Redirect without Location header"}
 

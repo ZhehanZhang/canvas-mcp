@@ -12,7 +12,7 @@ Supports two transport modes:
 - streamable-http: HTTP server, per-request credentials via X-Canvas-Token/X-Canvas-URL headers
 
 The server's own token is either static (CANVAS_API_TOKEN) or obtained and
-rotated automatically with CANVAS_AUTH_MODE=pennkey (see canvas_mcp.auth).
+replaced by a PennKey web session with CANVAS_AUTH_MODE=pennkey (see canvas_mcp.auth).
 """
 
 import argparse
@@ -159,7 +159,12 @@ def register_all_tools(mcp: FastMCP, role: str = "all") -> None:
         register_peer_review_comment_tools(mcp)
         register_educator_messaging_tools(mcp)
         register_accessibility_tools(mcp)
-        register_code_execution_tools(mcp)
+        if get_config().canvas_auth_mode == "pennkey":
+            # The TypeScript sandbox calls Canvas with a bearer token, which
+            # session-cookie auth doesn't have.
+            log_warning("execute_typescript is unavailable with CANVAS_AUTH_MODE=pennkey")
+        else:
+            register_code_execution_tools(mcp)
         register_admin_tools(mcp)
 
     # Resources and prompts — always registered
@@ -213,7 +218,7 @@ def _run_login() -> int:
     import getpass
     from dataclasses import replace
 
-    from .auth import AuthConfigError, AuthSettings, LoginError, TokenManager
+    from .auth import AuthConfigError, AuthSettings, LoginError, SessionManager
 
     if get_config().canvas_auth_mode != "pennkey":
         log_error("--login requires CANVAS_AUTH_MODE=pennkey")
@@ -235,20 +240,18 @@ def _run_login() -> int:
             bar = "=" * 64
             print(f"\n{bar}\n{message}\n{bar}\n", file=sys.stderr, flush=True)
 
-        manager = TokenManager(settings, on_notify=echo)
+        manager = SessionManager(settings, on_notify=echo)
         manager.login()
     except (AuthConfigError, LoginError) as e:
         log_error(f"PennKey login failed: {e}")
         return 1
-    current = manager.current
-    expires = current.expires_at if current else "unknown"
-    log_info(f"✓ Canvas token saved to {settings.token_file} (expires {expires})")
+    log_info(f"✓ Canvas session saved to {settings.session_file}")
     return 0
 
 
 def _print_auth_status() -> None:
     from .auth import AuthConfigError, AuthSettings
-    from .auth.token_store import TokenStore
+    from .auth.session import SessionStore
 
     try:
         settings = AuthSettings.from_env()
@@ -257,30 +260,26 @@ def _print_auth_status() -> None:
         return
     print(f"  Auth State Dir: {settings.state_dir}", file=sys.stderr)
     print(f"  Duo Factor: {settings.duo_factor}", file=sys.stderr)
-    stored = TokenStore(settings.token_file).load()
+    stored = SessionStore(settings.session_file).load()
     if stored is None:
-        print("  Saved Token: none (a PennKey + Duo login will run on startup)", file=sys.stderr)
+        print("  Saved Session: none (a PennKey + Duo login will run on startup)", file=sys.stderr)
     else:
-        print(f"  Saved Token Expires: {stored.expires_at or 'never'}", file=sys.stderr)
+        print(f"  Saved Session: from {stored.created_at or 'unknown time'}", file=sys.stderr)
 
 
 def _start_managed_auth() -> None:
-    """Obtain a token up front (may send a Duo Push) and start background rotation."""
-    from .auth import LoginError, get_token_manager
+    """Sign in up front (may send a Duo Push) and start background session checks."""
+    from .auth import LoginError, get_session_manager
 
-    manager = get_token_manager()
+    manager = get_session_manager()
     if manager is None:
         return
     try:
-        manager.ensure_valid_token(validate=True)
-        current = manager.current
-        log_info(
-            "✓ Canvas token ready",
-            expires_at=current.expires_at if current else None,
-        )
+        manager.ensure_valid_session(validate=True)
+        log_info("✓ Canvas session ready")
     except LoginError as e:
         log_error(
-            f"Could not obtain a Canvas token at startup: {e}. "
+            f"Could not obtain a Canvas session at startup: {e}. "
             "The server will keep running and retry on the next request."
         )
     manager.start_background_refresh()
@@ -321,7 +320,7 @@ def main() -> None:
     parser.add_argument(
         "--login",
         action="store_true",
-        help="CANVAS_AUTH_MODE=pennkey: run the PennKey + Duo login now, save the token, and exit"
+        help="CANVAS_AUTH_MODE=pennkey: run the PennKey + Duo login now, save the session, and exit"
     )
     parser.add_argument(
         "--role",
@@ -338,7 +337,7 @@ def main() -> None:
         sys.exit(_run_login())
 
     # In HTTP mode, .env credentials are optional (per-request auth instead),
-    # unless the server manages its own token via PennKey login.
+    # unless the server manages its own session via PennKey login.
     if not is_http or auto_auth:
         if not validate_config():
             log_error("Please check your .env file configuration")
@@ -415,7 +414,7 @@ def main() -> None:
         allow_open = os.getenv("MCP_HTTP_ALLOW_UNAUTHENTICATED", "").lower() == "true"
         if not allow_open:
             log_error(
-                "Refusing to serve HTTP with a server-managed PennKey token and no "
+                "Refusing to serve HTTP with a server-managed PennKey session and no "
                 "MCP_HTTP_AUTH_TOKEN: anyone reaching the port could act as you in Canvas. "
                 "Set MCP_HTTP_AUTH_TOKEN (clients send 'Authorization: Bearer <value>')."
             )
@@ -432,7 +431,7 @@ def main() -> None:
         )
         if auto_auth:
             log_info(
-                "Credentials: server-managed PennKey token "
+                "Credentials: server-managed PennKey session "
                 "(X-Canvas-Token / X-Canvas-URL headers still override per request)"
             )
         else:
