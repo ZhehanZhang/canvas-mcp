@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept alive from Canvas' refreshed cookies, and re-established automatically
   when it ends. Includes `--login`, an optional `pennkey` extra, a
   `WITH_PENNKEY_AUTH` Docker build arg, `docker-compose.pennkey.yml`, and a
-  required `MCP_HTTP_AUTH_TOKEN` bearer gate when serving HTTP with a
+  required `MCP_API_KEY` gate (Bearer or `X-API-Key`) when serving HTTP with a
   server-managed session.
   See [docs/guides/pennkey-auth.md](docs/guides/pennkey-auth.md).
 

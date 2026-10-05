@@ -35,7 +35,7 @@ Safeguards:
   `PENNKEY_LOGIN_COOLDOWN_SEC` (default 15 min), so your phone isn't spammed.
 - A Canvas 401 only triggers a re-login if `/users/self` also rejects the
   session. Canvas also returns 401 for ordinary permission errors.
-- In HTTP mode, the server refuses to start unless `MCP_HTTP_AUTH_TOKEN` is set,
+- In HTTP mode, the server refuses to start unless `MCP_API_KEY` is set,
   because every caller would otherwise act as you in Canvas.
 
 Limits:
@@ -52,14 +52,23 @@ Limits:
 mkdir -p secrets
 printf '%s' 'your-pennkey'  > secrets/pennkey_username
 printf '%s' 'your-password' > secrets/pennkey_password
-openssl rand -hex 32        > secrets/mcp_http_auth_token
+openssl rand -hex 32        > secrets/mcp_api_key
 docker compose -f docker-compose.pennkey.yml up -d --build
 docker compose -f docker-compose.pennkey.yml logs -f   # shows the Duo code to enter
 ```
 
-The MCP endpoint is `http://127.0.0.1:8819/mcp`. Clients send
-`Authorization: Bearer <contents of secrets/mcp_http_auth_token>`.
-Put a TLS reverse proxy in front before exposing it beyond localhost.
+The MCP tools are served at `http://127.0.0.1:8819/mcp` (streamable HTTP).
+Clients send the key from `secrets/mcp_api_key` as
+`Authorization: Bearer <key>` or `X-API-Key: <key>`. Terminate TLS with your
+own reverse proxy and point it at that port. If the proxy runs on another
+host, publish on all interfaces with `MCP_BIND_ADDRESS=0.0.0.0`; change the
+host port with `MCP_PORT`.
+
+To do the first sign-in interactively (prompts in your terminal, then exits):
+
+```bash
+docker compose -f docker-compose.pennkey.yml run --rm canvas-mcp canvas-mcp-server --login
+```
 
 The `canvas-auth` volume keeps the session and browser cookies, including
 Duo's "remember this device", across restarts.
@@ -95,10 +104,11 @@ canvas-mcp-server --config    # shows auth mode and whether a session is saved
 | `DUO_MAX_PUSH_ATTEMPTS` | `2` | Pushes per login before giving up |
 | `DUO_TRUST_BROWSER` | `true` | Answer "Yes, this is my device" |
 | `PENNKEY_HEADLESS` | `true` | `false` shows the browser window (local debugging) |
+| `PENNKEY_USER_AGENT` | regular Chrome UA | Override the login browser's user-agent string |
 | `PENNKEY_DEBUG` | `false` | Save a screenshot (and Duo page HTML) at every Duo step |
 | `PENNKEY_LOGIN_COOLDOWN_SEC` | `900` | Pause after a failed login |
 | `AUTH_NOTIFY_WEBHOOK_URL` / `_FILE` | | Optional ping when a push is waiting or login fails |
-| `MCP_HTTP_AUTH_TOKEN` / `_FILE` | | Bearer key required for HTTP transport |
+| `MCP_API_KEY` / `_FILE` | | API key required for HTTP transport (`MCP_HTTP_AUTH_TOKEN` also accepted) |
 
 ## Troubleshooting
 

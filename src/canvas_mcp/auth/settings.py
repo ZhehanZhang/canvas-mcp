@@ -75,6 +75,7 @@ class AuthSettings:
     notify_webhook_url: str
     headless: bool
     debug: bool = False
+    user_agent: str = ""
 
     @property
     def base_url(self) -> str:
@@ -138,6 +139,7 @@ class AuthSettings:
             notify_webhook_url=read_secret("AUTH_NOTIFY_WEBHOOK_URL"),
             headless=_bool("PENNKEY_HEADLESS", True),
             debug=_bool("PENNKEY_DEBUG", False),
+            user_agent=os.getenv("PENNKEY_USER_AGENT", "").strip(),
         )
 
     def require_credentials(self) -> None:
