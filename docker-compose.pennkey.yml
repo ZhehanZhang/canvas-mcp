@@ -9,8 +9,9 @@
 #   docker compose -f docker-compose.pennkey.yml up -d --build
 #   docker compose -f docker-compose.pennkey.yml logs -f   # shows the Duo code to enter
 #
-# MCP endpoint: http://<bind address>:8819/mcp, API key required as
-# "Authorization: Bearer <key>" or "X-API-Key: <key>". TLS is expected to be
+# MCP endpoint: http://<bind address>:8819/mcp, API key required, sent as
+# ?api_key=<key> in the URL, "X-API-Key: <key>", or "Authorization: [Bearer] <key>".
+# TLS is expected to be
 # terminated by your own reverse proxy. By default the port is published on
 # 127.0.0.1 only; set MCP_BIND_ADDRESS=0.0.0.0 if the proxy runs on another
 # host, and MCP_PORT to change the host port.

@@ -61,8 +61,12 @@ docker compose -f docker-compose.pennkey.yml logs -f   # shows the Duo code to e
 ```
 
 The MCP tools are served at `http://127.0.0.1:8819/mcp` (streamable HTTP).
-Clients send the key from `secrets/mcp_api_key` as
-`Authorization: Bearer <key>` or `X-API-Key: <key>`. Terminate TLS with your
+The API key from `secrets/mcp_api_key` is always required. Clients can send it
+in the URL as `http://127.0.0.1:8819/mcp?api_key=<key>` (for clients that only
+take a URL), as `X-API-Key: <key>`, or as `Authorization: Bearer <key>` (the
+`Bearer ` prefix is optional). The server strips the key from the URL before
+logging; your reverse proxy may still log full URLs, so check its access log
+settings if you use the URL form. Terminate TLS with your
 own reverse proxy and point it at that port. If the proxy runs on another
 host, publish on all interfaces with `MCP_BIND_ADDRESS=0.0.0.0`; change the
 host port with `MCP_PORT`.
@@ -111,7 +115,7 @@ canvas-mcp-server --config    # shows auth mode and whether a session is saved
 | `PENNKEY_DEBUG` | `false` | Save a screenshot (and Duo page HTML) at every Duo step |
 | `PENNKEY_LOGIN_COOLDOWN_SEC` | `900` | Pause after a failed login |
 | `AUTH_NOTIFY_WEBHOOK_URL` / `_FILE` | | Optional push when a Duo code is waiting or login fails. `https://api.day.app/<device-key>` sends via Bark; other URLs get JSON `{text, content}` (Slack/Discord/ntfy) |
-| `MCP_API_KEY` / `_FILE` | | API key required for HTTP transport (`MCP_HTTP_AUTH_TOKEN` also accepted) |
+| `MCP_API_KEY` / `_FILE` | | API key required for HTTP transport: `?api_key=`, `X-API-Key`, or `Authorization` (`MCP_HTTP_AUTH_TOKEN` also accepted) |
 
 ## Troubleshooting
 
