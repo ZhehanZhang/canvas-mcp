@@ -74,7 +74,8 @@ class CanvasCredentialMiddleware:
         if scope["type"] == "http":
             # Parse headers from ASGI scope (list of [name, value] byte pairs)
             headers = dict(scope.get("headers", []))
-            if self.access_key and not self._authorized(headers):
+            query_key = self._pop_query_key(scope)
+            if self.access_key and not self._authorized(headers, query_key):
                 await send({
                     "type": "http.response.start",
                     "status": 401,
@@ -100,17 +101,44 @@ class CanvasCredentialMiddleware:
             # Passthrough for lifespan and other non-HTTP scopes
             await self.app(scope, receive, send)
 
-    def _authorized(self, headers: dict) -> bool:
-        """Accept the API key as ``Authorization: Bearer <key>`` or ``X-API-Key: <key>``."""
+    @staticmethod
+    def _pop_query_key(scope: dict) -> bytes:
+        """Take ``api_key``/``key`` out of the query string.
+
+        Removing it from the scope keeps the key out of uvicorn's access log
+        and away from the MCP app.
+        """
+        from urllib.parse import parse_qsl, urlencode
+
+        raw = scope.get("query_string", b"")
+        if not raw:
+            return b""
+        found = b""
+        kept = []
+        for name, value in parse_qsl(raw.decode("latin-1"), keep_blank_values=True):
+            if name in _QUERY_KEY_PARAMS:
+                found = found or value.encode("latin-1")
+            else:
+                kept.append((name, value))
+        if found:
+            scope["query_string"] = urlencode(kept).encode("latin-1")
+        return found
+
+    def _authorized(self, headers: dict, query_key: bytes = b"") -> bool:
+        """Accept the API key as ``Authorization: Bearer <key>``, a bare
+        ``Authorization: <key>``, ``X-API-Key: <key>``, or ``?api_key=<key>``."""
         expected = self.access_key.encode()
-        api_key = headers.get(b"x-api-key", b"").strip()
-        if api_key and hmac.compare_digest(api_key, expected):
-            return True
-        presented = headers.get(b"authorization", b"").decode()
+        presented = headers.get(b"authorization", b"").decode().strip()
         scheme, _, value = presented.partition(" ")
-        if scheme.lower() != "bearer":
-            return False
-        return hmac.compare_digest(value.strip().encode(), expected)
+        candidates = [
+            query_key,
+            headers.get(b"x-api-key", b"").strip(),
+            value.strip().encode() if scheme.lower() == "bearer" else presented.encode(),
+        ]
+        return any(c and hmac.compare_digest(c, expected) for c in candidates)
+
+
+_QUERY_KEY_PARAMS = frozenset({"api_key", "apikey", "key"})
 
 
 def create_server(
@@ -422,7 +450,7 @@ def main() -> None:
             log_error(
                 "Refusing to serve HTTP with a server-managed PennKey session and no "
                 "API key: anyone reaching the port could act as you in Canvas. "
-                "Set MCP_API_KEY (clients send 'Authorization: Bearer <key>' or 'X-API-Key: <key>')."
+                "Set MCP_API_KEY (clients send it as ?api_key=<key>, 'X-API-Key: <key>', or 'Authorization: Bearer <key>')."
             )
             sys.exit(1)
         log_warning("MCP_HTTP_ALLOW_UNAUTHENTICATED=true: HTTP endpoint has no access control")
