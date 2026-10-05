@@ -230,7 +230,12 @@ def _run_login() -> int:
                 settings = replace(
                     settings, duo_passcode=getpass.getpass("Duo passcode: ").strip()
                 )
-        manager = TokenManager(settings)
+        def echo(message: str) -> None:
+            # Make Duo prompts (incl. the Verified Push code) impossible to miss.
+            bar = "=" * 64
+            print(f"\n{bar}\n{message}\n{bar}\n", file=sys.stderr, flush=True)
+
+        manager = TokenManager(settings, on_notify=echo)
         manager.login()
     except (AuthConfigError, LoginError) as e:
         log_error(f"PennKey login failed: {e}")

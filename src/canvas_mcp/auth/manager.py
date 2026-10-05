@@ -42,8 +42,10 @@ class TokenManager:
         settings: AuthSettings,
         login_runner: LoginRunner = _default_login,
         store: TokenStore | None = None,
+        on_notify: Callable[[str], None] | None = None,
     ) -> None:
         self.settings = settings
+        self._on_notify = on_notify
         self._login_runner = login_runner
         self._store = store or TokenStore(settings.token_file)
         self._lock = threading.RLock()
@@ -233,6 +235,8 @@ class TokenManager:
         get_config().canvas_api_token = token.token
 
     def notify(self, message: str) -> None:
+        if self._on_notify is not None:
+            self._on_notify(message)
         url = self.settings.notify_webhook_url
         if not url:
             return

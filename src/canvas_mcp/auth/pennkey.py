@@ -56,16 +56,46 @@ Notifier = Callable[[str], None]
 WEBLOGIN_HOST_HINTS = ("weblogin.pennkey.upenn.edu", "/idp/profile/")
 DUO_HOST_HINT = "duosecurity.com"
 
+# A headless server has no security key, but Duo picks one as the default
+# method when the browser advertises WebAuthn support. Hiding WebAuthn on Duo's
+# pages makes Duo fall back to the account's other methods (Duo Push).
+DISABLE_WEBAUTHN_ON_DUO = """
+if (location.hostname.endsWith('duosecurity.com')) {
+  try { delete window.PublicKeyCredential; } catch (e) {}
+  try { Object.defineProperty(window, 'PublicKeyCredential', {value: undefined, configurable: true}); } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'credentials', {value: undefined, configurable: true});
+  } catch (e) {}
+}
+"""
+
 # Duo Universal Prompt text/selectors. Duo changes its markup occasionally, so
 # each step lists several fallbacks and the flow fails with a saved screenshot
 # rather than hanging.
 DUO_TRUST_YES = ["#trust-browser-button", "button:has-text('Yes, this is my device')"]
 DUO_TRUST_NO = ["#dont-trust-browser-button", "button:has-text('No, other people use this device')"]
-DUO_OTHER_OPTIONS = ["a:has-text('Other options')", "button:has-text('Other options')"]
+DUO_OTHER_OPTIONS = [
+    "a:has-text('Other options')",
+    "button:has-text('Other options')",
+    "a:has-text('Other methods')",
+    "button:has-text('Other methods')",
+]
+DUO_CANCEL = ["button:has-text('Cancel')", "a:has-text('Cancel')"]
+DUO_PUSH_SENT_TEXT = re.compile(
+    r"(check for a duo push|pushed a login request|push sent|sent to .*(phone|iphone|android|ipad)"
+    r"|enter (this|the) code|verification code)",
+    re.I,
+)
+DUO_CODE_SELECTORS = [
+    ".verification-code",
+    "[class*='verification-code']",
+    "[data-testid*='verification-code']",
+    "[class*='verification'] [class*='code']",
+]
 DUO_CHOOSE_PUSH = [
     "[data-testid='test-id-push']",
-    "a:has-text('Duo Push')",
     "button:has-text('Duo Push')",
+    "a:has-text('Duo Push')",
     "li:has-text('Duo Push')",
 ]
 DUO_CHOOSE_PASSCODE = [
@@ -126,15 +156,16 @@ class PennKeyLogin:
                 if self.settings.browser_state_file.exists():
                     context_kwargs["storage_state"] = str(self.settings.browser_state_file)
                 context = browser.new_context(**context_kwargs)
+                context.add_init_script(DISABLE_WEBAUTHN_ON_DUO)
                 page = context.new_page()
                 page.set_default_timeout(self.settings.login_timeout_sec * 1000)
                 try:
                     self._login(page)
+                    self._save_browser_state(context)
                     token = self._create_token(context)
                 except Exception:
                     self._save_debug(page)
                     raise
-                self._save_browser_state(context)
                 return token
             finally:
                 browser.close()
@@ -146,7 +177,7 @@ class PennKeyLogin:
         log_info("PennKey login: opening Canvas SSO")
         page.goto(f"{s.base_url}{s.login_path}", wait_until="domcontentloaded")
 
-        deadline = time.monotonic() + s.login_timeout_sec + s.duo_timeout_sec * max(1, s.duo_max_push_attempts)
+        deadline = time.monotonic() + s.login_timeout_sec
         submitted_password = False
         while time.monotonic() < deadline:
             page.wait_for_load_state("domcontentloaded")
@@ -158,7 +189,10 @@ class PennKeyLogin:
                 return
 
             if DUO_HOST_HINT in host:
+                # Duo has its own timeouts; time spent waiting on the phone
+                # doesn't count against the page-navigation budget.
                 self._handle_duo(page)
+                deadline = time.monotonic() + s.login_timeout_sec
                 continue
 
             if any(h in url for h in WEBLOGIN_HOST_HINTS):
@@ -200,37 +234,109 @@ class PennKeyLogin:
 
     def _handle_duo(self, page: "Page") -> None:
         s = self.settings
+        self._debug_snapshot(page, "duo-start")
         if s.duo_factor == "passcode":
             self._duo_passcode(page)
         else:
             self._duo_push(page)
         self._duo_wait_for_exit(page)
+        # Persist Duo's "remember this device" cookie right away, so it survives
+        # even if a later step (token creation) fails.
+        self._save_browser_state(page.context)
+
+    def _push_in_progress(self, page: "Page") -> bool:
+        try:
+            body = page.locator("body").inner_text(timeout=2000)
+        except Exception:  # noqa: BLE001 - page navigating
+            return False
+        return bool(DUO_PUSH_SENT_TEXT.search(body))
+
+    def _select_push(self, page: "Page") -> bool:
+        """Make Duo send a push. Returns True once a push is pending.
+
+        Penn accounts may default to a security key or another method, so when
+        no push is pending go through "Other options" and pick Duo Push.
+        """
+        for _ in range(10):
+            if DUO_HOST_HINT not in _host(page.url):
+                return False
+            if self._push_in_progress(page):
+                return True
+            send = _first_visible(page, DUO_SEND_PUSH) or _first_visible(page, DUO_CHOOSE_PUSH)
+            if send is not None:
+                send.click()
+                page.wait_for_timeout(1500)
+                continue
+            # Security-key (or other) screen: dismiss it and open the method list.
+            cancel = _first_visible(page, DUO_CANCEL)
+            if cancel is not None:
+                cancel.click()
+                page.wait_for_timeout(800)
+            other = _first_visible(page, DUO_OTHER_OPTIONS)
+            if other is not None:
+                other.click()
+                page.wait_for_timeout(1500)
+                self._debug_snapshot(page, "duo-other-options")
+                continue
+            page.wait_for_timeout(1000)
+        return self._push_in_progress(page)
+
+    def _read_verification_code(self, page: "Page") -> str | None:
+        """Read Duo Verified Push's on-screen code (3 to 6 digits), if shown."""
+        for selector in DUO_CODE_SELECTORS:
+            try:
+                locator = page.locator(selector).first
+                if locator.count() and locator.is_visible():
+                    match = re.search(r"\b(\d{3,6})\b", locator.inner_text(timeout=1000))
+                    if match:
+                        return match.group(1)
+            except Exception:  # noqa: BLE001
+                continue
+        try:
+            body = page.locator("body").inner_text(timeout=2000)
+        except Exception:  # noqa: BLE001
+            return None
+        for line in body.splitlines():
+            line = line.strip()
+            if re.fullmatch(r"\d{3,6}", line):
+                return line
+        return None
 
     def _duo_push(self, page: "Page") -> None:
         s = self.settings
-        for attempt in range(1, max(1, s.duo_max_push_attempts) + 1):
-            # Universal Prompt usually sends the push automatically; only pick the
-            # method when it is waiting for a choice.
+        attempts = max(1, s.duo_max_push_attempts)
+        for attempt in range(1, attempts + 1):
             page.wait_for_timeout(1500)
-            if DUO_HOST_HINT not in _host(page.url):
+            if DUO_HOST_HINT not in _host(page.url) or _first_visible(page, DUO_TRUST_YES) is not None:
                 return
-            if _first_visible(page, DUO_TRUST_YES) is not None:
-                return
-            send = _first_visible(page, DUO_SEND_PUSH) or _first_visible(page, DUO_CHOOSE_PUSH)
-            if send is None:
-                other = _first_visible(page, DUO_OTHER_OPTIONS)
-                if other is not None and "Check for a Duo Push" not in page.content():
-                    other.click()
-                    page.wait_for_timeout(1000)
-                    send = _first_visible(page, DUO_CHOOSE_PUSH)
-            if send is not None:
-                send.click()
+            if not self._select_push(page):
+                if DUO_HOST_HINT not in _host(page.url):
+                    return
+                self._debug_snapshot(page, "duo-no-push")
+                raise DuoError(
+                    "Could not get Duo to send a push (no Duo Push option found). "
+                    "Check that Duo Push is enrolled for this PennKey."
+                )
+            self._debug_snapshot(page, "duo-push-sent")
 
-            msg = (
-                f"Canvas MCP: Duo Push sent to {s.username}'s phone for Canvas sign-in "
-                f"(attempt {attempt}/{s.duo_max_push_attempts}). Approve it to let the server refresh its Canvas token."
-            )
-            log_info(msg)
+            code = None
+            for _ in range(5):
+                code = self._read_verification_code(page)
+                if code:
+                    break
+                page.wait_for_timeout(500)
+            if code:
+                msg = (
+                    f"Canvas MCP: Duo Push sent for {s.username}. "
+                    f"Enter code {code} in Duo Mobile to approve "
+                    f"(attempt {attempt}/{attempts})."
+                )
+            else:
+                msg = (
+                    f"Canvas MCP: Duo Push sent for {s.username}. Approve it in Duo Mobile "
+                    f"(attempt {attempt}/{attempts})."
+                )
+            log_warning(msg)
             self.notify(msg)
 
             outcome = self._wait_for_push_result(page)
@@ -238,14 +344,13 @@ class PennKeyLogin:
                 return
             if outcome == "denied":
                 raise DuoError("The Duo Push was denied")
-            retry = _first_visible(page, DUO_RETRY)
-            if retry is None or attempt >= s.duo_max_push_attempts:
+            if attempt >= attempts:
                 break
-            retry.click()
+            retry = _first_visible(page, DUO_RETRY)
+            if retry is not None:
+                retry.click()
 
-        raise DuoError(
-            f"Duo Push was not approved after {s.duo_max_push_attempts} attempt(s)"
-        )
+        raise DuoError(f"Duo Push was not approved after {attempts} attempt(s)")
 
     def _wait_for_push_result(self, page: "Page") -> str:
         deadline = time.monotonic() + self.settings.duo_timeout_sec
@@ -275,16 +380,21 @@ class PennKeyLogin:
         page.wait_for_timeout(1500)
         field = _first_visible(page, DUO_PASSCODE_INPUT)
         if field is None:
+            cancel = _first_visible(page, DUO_CANCEL)
+            if cancel is not None:
+                cancel.click()
+                page.wait_for_timeout(800)
             other = _first_visible(page, DUO_OTHER_OPTIONS)
             if other is not None:
                 other.click()
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(1500)
             choose = _first_visible(page, DUO_CHOOSE_PASSCODE)
             if choose is not None:
                 choose.click()
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(1500)
             field = _first_visible(page, DUO_PASSCODE_INPUT)
         if field is None:
+            self._debug_snapshot(page, "duo-no-passcode-field")
             raise DuoError("Could not find Duo's passcode field")
         field.fill(passcode)
         verify = _first_visible(page, DUO_VERIFY)
@@ -294,14 +404,22 @@ class PennKeyLogin:
 
     def _duo_wait_for_exit(self, page: "Page") -> None:
         deadline = time.monotonic() + self.settings.duo_timeout_sec
+        clicked_trust = False
         while time.monotonic() < deadline and DUO_HOST_HINT in _host(page.url):
             choice = _first_visible(
                 page, DUO_TRUST_YES if self.settings.duo_trust_browser else DUO_TRUST_NO
             )
-            if choice is not None:
+            if choice is not None and not clicked_trust:
+                self._debug_snapshot(page, "duo-trust")
                 choice.click()
+                clicked_trust = True
+                log_info(
+                    "Duo: answered 'Is this your device?' with "
+                    + ("yes (remember this browser)" if self.settings.duo_trust_browser else "no")
+                )
             page.wait_for_timeout(1000)
         if DUO_HOST_HINT in _host(page.url):
+            self._debug_snapshot(page, "duo-stuck")
             raise DuoError("Duo did not finish after approval")
 
     def _create_token(self, context: "BrowserContext") -> StoredToken:
@@ -321,8 +439,9 @@ class PennKeyLogin:
         body = strip_json_prefix(response.text())
         if not response.ok:
             raise LoginError(
-                f"Canvas refused to create an access token (HTTP {response.status}). "
-                "Your Canvas account may not be allowed to create personal access tokens."
+                f"Canvas refused to create an access token (HTTP {response.status}): "
+                f"{body[:300]}. Your Canvas account may not be allowed to create "
+                "personal access tokens."
             )
         token = StoredToken.from_api(json.loads(body))
         log_info("PennKey login: created a new Canvas access token", token_id=token.token_id)
@@ -337,6 +456,23 @@ class PennKeyLogin:
             )
         except Exception as e:  # noqa: BLE001 - best effort
             log_warning("Could not save browser state", error_type=type(e).__name__)
+
+    def _debug_snapshot(self, page: "Page", label: str) -> None:
+        """With PENNKEY_DEBUG=true, save a screenshot and Duo's HTML at each Duo step.
+
+        Only Duo pages are saved as HTML; they never contain the PennKey password.
+        """
+        if not self.settings.debug:
+            return
+        try:
+            debug_dir = self.settings.debug_dir
+            debug_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            stem = debug_dir / f"{int(time.time())}-{label}"
+            page.screenshot(path=f"{stem}.png", full_page=True)
+            if DUO_HOST_HINT in _host(page.url):
+                write_private_file(stem.with_suffix(".html"), page.content())
+        except Exception:  # noqa: BLE001 - best effort
+            pass
 
     def _save_debug(self, page: "Page") -> None:
         """Save a screenshot of the failing page (no HTML, which can echo credentials)."""
