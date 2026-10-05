@@ -140,15 +140,22 @@ def _get_http_client() -> httpx.AsyncClient:
 
     if http_client is None:
         from .. import __version__
+        from ..auth import get_token_manager
         from .config import get_config
         config = get_config()
-        http_client = httpx.AsyncClient(
-            headers={
-                'Authorization': f'Bearer {config.api_token}',
-                'User-Agent': f'canvas-mcp/{__version__} (https://github.com/vishalsachdev/canvas-mcp)'
-            },
-            timeout=config.api_timeout
-        )
+        headers = {
+            'User-Agent': f'canvas-mcp/{__version__} (https://github.com/vishalsachdev/canvas-mcp)'
+        }
+        manager = get_token_manager()
+        if manager is not None:
+            # CANVAS_AUTH_MODE=pennkey: token is obtained/rotated automatically
+            from ..auth.httpx_auth import ManagedTokenAuth
+            http_client = httpx.AsyncClient(
+                headers=headers, auth=ManagedTokenAuth(manager), timeout=config.api_timeout
+            )
+        else:
+            headers['Authorization'] = f'Bearer {config.api_token}'
+            http_client = httpx.AsyncClient(headers=headers, timeout=config.api_timeout)
         _http_client_loop_ref = weakref.ref(current_loop) if current_loop is not None else None
     return http_client
 

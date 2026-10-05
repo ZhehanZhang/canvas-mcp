@@ -93,3 +93,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Docker secrets for PennKey auth
+secrets/

@@ -56,6 +56,14 @@ class Config:
         self.canvas_api_token = os.getenv("CANVAS_API_TOKEN", "")
         self.canvas_api_url = os.getenv("CANVAS_API_URL", "")
 
+        # Token source: "token" (static CANVAS_API_TOKEN) or "pennkey"
+        # (automated PennKey + Duo login, see canvas_mcp.auth)
+        self.canvas_auth_mode = os.getenv("CANVAS_AUTH_MODE", "token").strip().lower() or "token"
+        if self.canvas_auth_mode == "pennkey" and not self.canvas_api_url:
+            from ..auth.settings import DEFAULT_PENN_CANVAS_API_URL
+
+            self.canvas_api_url = DEFAULT_PENN_CANVAS_API_URL
+
         # Optional configuration with defaults
         self.mcp_server_name = os.getenv("MCP_SERVER_NAME", "canvas-api")
         self.debug = _bool_env("DEBUG", False)
@@ -136,7 +144,21 @@ def validate_config() -> bool:
         "FIREWALL_HINT": "firewall hints are documentation-only",
     }
 
-    if not config.canvas_api_token:
+    if config.canvas_auth_mode not in ("token", "pennkey"):
+        log_error(
+            f"CANVAS_AUTH_MODE must be 'token' or 'pennkey' (got '{config.canvas_auth_mode}')"
+        )
+        return False
+
+    if config.canvas_auth_mode == "pennkey":
+        from ..auth.settings import AuthConfigError, AuthSettings
+
+        try:
+            AuthSettings.from_env()
+        except AuthConfigError as e:
+            log_error(f"Invalid PennKey auth configuration: {e}")
+            return False
+    elif not config.canvas_api_token:
         log_error("CANVAS_API_TOKEN environment variable is required")
         log_error("Please set CANVAS_API_TOKEN in your .env file")
         return False

@@ -34,6 +34,13 @@ dependencies = [
     "uvicorn>=0.34.0",
 ]
 
+[project.optional-dependencies]
+# Headless PennKey + Duo login (CANVAS_AUTH_MODE=pennkey).
+# After installing, run: playwright install chromium
+pennkey = [
+    "playwright>=1.48",
+]
+
 
 [project.urls]
 Homepage = "https://github.com/vishalsachdev/canvas-mcp"

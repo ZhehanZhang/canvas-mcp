@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Automated Canvas token retrieval (`CANVAS_AUTH_MODE=pennkey`).** Headless
+  PennKey (Penn WebLogin) login with Duo Push approved by the account owner,
+  then automatic token creation, persistence, and rotation via Canvas'
+  regenerate API (no Duo needed for routine refresh). Includes `--login`,
+  an optional `pennkey` extra, a `WITH_PENNKEY_AUTH` Docker build arg,
+  `docker-compose.pennkey.yml`, and a required `MCP_HTTP_AUTH_TOKEN` bearer
+  gate when serving HTTP with a server-managed token.
+  See [docs/guides/pennkey-auth.md](docs/guides/pennkey-auth.md).
+
 ### Security
 - **Retired the public hosted server (`mcp.illinihunt.org`).** It had been
   deployed without an authentication gate, which left the sandboxed

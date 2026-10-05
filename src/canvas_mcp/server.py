@@ -10,10 +10,15 @@ academic tracking.
 Supports two transport modes:
 - stdio (default): Local process communication, credentials from .env
 - streamable-http: HTTP server, per-request credentials via X-Canvas-Token/X-Canvas-URL headers
+
+The server's own token is either static (CANVAS_API_TOKEN) or obtained and
+rotated automatically with CANVAS_AUTH_MODE=pennkey (see canvas_mcp.auth).
 """
 
 import argparse
 import asyncio
+import hmac
+import os
 import sys
 from typing import Any
 
@@ -61,13 +66,25 @@ class CanvasCredentialMiddleware:
     the caller's credentials instead of the server's .env config.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, access_key: str = "") -> None:
         self.app = app
+        self.access_key = access_key
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] == "http":
             # Parse headers from ASGI scope (list of [name, value] byte pairs)
             headers = dict(scope.get("headers", []))
+            if self.access_key and not self._authorized(headers):
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"www-authenticate", b"Bearer"),
+                    ],
+                })
+                await send({"type": "http.response.body", "body": b'{"error": "unauthorized"}'})
+                return
             token = headers.get(b"x-canvas-token", b"").decode()
             canvas_url = headers.get(b"x-canvas-url", b"").decode()
 
@@ -82,6 +99,13 @@ class CanvasCredentialMiddleware:
         else:
             # Passthrough for lifespan and other non-HTTP scopes
             await self.app(scope, receive, send)
+
+    def _authorized(self, headers: dict) -> bool:
+        presented = headers.get(b"authorization", b"").decode()
+        scheme, _, value = presented.partition(" ")
+        if scheme.lower() != "bearer":
+            return False
+        return hmac.compare_digest(value.strip().encode(), self.access_key.encode())
 
 
 def create_server(
@@ -184,6 +208,79 @@ def test_connection() -> bool:
         return False
 
 
+def _run_login() -> int:
+    """Handle ``--login``: one interactive-capable PennKey + Duo login."""
+    import getpass
+    from dataclasses import replace
+
+    from .auth import AuthConfigError, AuthSettings, LoginError, TokenManager
+
+    if get_config().canvas_auth_mode != "pennkey":
+        log_error("--login requires CANVAS_AUTH_MODE=pennkey")
+        return 1
+    try:
+        settings = AuthSettings.from_env()
+        if sys.stdin.isatty():
+            # Interactive bootstrap: prompt for anything not provided via env/secrets.
+            if not settings.username:
+                settings = replace(settings, username=input("PennKey username: ").strip())
+            if not settings.password:
+                settings = replace(settings, password=getpass.getpass("PennKey password: "))
+            if settings.duo_factor == "passcode" and not settings.duo_passcode:
+                settings = replace(
+                    settings, duo_passcode=getpass.getpass("Duo passcode: ").strip()
+                )
+        manager = TokenManager(settings)
+        manager.login()
+    except (AuthConfigError, LoginError) as e:
+        log_error(f"PennKey login failed: {e}")
+        return 1
+    current = manager.current
+    expires = current.expires_at if current else "unknown"
+    log_info(f"✓ Canvas token saved to {settings.token_file} (expires {expires})")
+    return 0
+
+
+def _print_auth_status() -> None:
+    from .auth import AuthConfigError, AuthSettings
+    from .auth.token_store import TokenStore
+
+    try:
+        settings = AuthSettings.from_env()
+    except AuthConfigError as e:
+        print(f"  Auth Config Error: {e}", file=sys.stderr)
+        return
+    print(f"  Auth State Dir: {settings.state_dir}", file=sys.stderr)
+    print(f"  Duo Factor: {settings.duo_factor}", file=sys.stderr)
+    stored = TokenStore(settings.token_file).load()
+    if stored is None:
+        print("  Saved Token: none (a PennKey + Duo login will run on startup)", file=sys.stderr)
+    else:
+        print(f"  Saved Token Expires: {stored.expires_at or 'never'}", file=sys.stderr)
+
+
+def _start_managed_auth() -> None:
+    """Obtain a token up front (may send a Duo Push) and start background rotation."""
+    from .auth import LoginError, get_token_manager
+
+    manager = get_token_manager()
+    if manager is None:
+        return
+    try:
+        manager.ensure_valid_token(validate=True)
+        current = manager.current
+        log_info(
+            "✓ Canvas token ready",
+            expires_at=current.expires_at if current else None,
+        )
+    except LoginError as e:
+        log_error(
+            f"Could not obtain a Canvas token at startup: {e}. "
+            "The server will keep running and retry on the next request."
+        )
+    manager.start_background_refresh()
+
+
 def main() -> None:
     """Main entry point for the Canvas MCP server."""
     parser = argparse.ArgumentParser(
@@ -217,6 +314,11 @@ def main() -> None:
         help="Port for HTTP server (default: 8819)"
     )
     parser.add_argument(
+        "--login",
+        action="store_true",
+        help="CANVAS_AUTH_MODE=pennkey: run the PennKey + Duo login now, save the token, and exit"
+    )
+    parser.add_argument(
         "--role",
         choices=["student", "educator", "all"],
         default=None,
@@ -225,9 +327,14 @@ def main() -> None:
 
     args = parser.parse_args()
     is_http = args.transport == "streamable-http"
+    auto_auth = get_config().canvas_auth_mode == "pennkey"
 
-    # In HTTP mode, .env credentials are optional (per-request auth instead)
-    if not is_http:
+    if args.login:
+        sys.exit(_run_login())
+
+    # In HTTP mode, .env credentials are optional (per-request auth instead),
+    # unless the server manages its own token via PennKey login.
+    if not is_http or auto_auth:
         if not validate_config():
             log_error("Please check your .env file configuration")
             log_error("Use the env.template file as a reference")
@@ -247,6 +354,9 @@ def main() -> None:
             print(f"  Port: {args.port}", file=sys.stderr)
         else:
             print(f"  Canvas API URL: {config.canvas_api_url}", file=sys.stderr)
+        print(f"  Auth Mode: {config.canvas_auth_mode}", file=sys.stderr)
+        if auto_auth:
+            _print_auth_status()
         print(f"  Debug Mode: {config.debug}", file=sys.stderr)
         print(f"  API Timeout: {config.api_timeout}s", file=sys.stderr)
         print(f"  Cache TTL: {config.cache_ttl}s", file=sys.stderr)
@@ -293,12 +403,35 @@ def main() -> None:
     from .core.audit import init_audit_logging
     init_audit_logging()
 
+    from .auth.settings import read_secret
+
+    http_access_key = read_secret("MCP_HTTP_AUTH_TOKEN").strip()
+    if is_http and auto_auth and not http_access_key:
+        allow_open = os.getenv("MCP_HTTP_ALLOW_UNAUTHENTICATED", "").lower() == "true"
+        if not allow_open:
+            log_error(
+                "Refusing to serve HTTP with a server-managed PennKey token and no "
+                "MCP_HTTP_AUTH_TOKEN: anyone reaching the port could act as you in Canvas. "
+                "Set MCP_HTTP_AUTH_TOKEN (clients send 'Authorization: Bearer <value>')."
+            )
+            sys.exit(1)
+        log_warning("MCP_HTTP_ALLOW_UNAUTHENTICATED=true: HTTP endpoint has no access control")
+
+    if auto_auth:
+        _start_managed_auth()
+
     # Normal server startup
     if is_http:
         log_info(
             f"Starting Canvas MCP server in HTTP mode on {args.host}:{args.port}"
         )
-        log_info("Credentials: per-request via X-Canvas-Token / X-Canvas-URL headers")
+        if auto_auth:
+            log_info(
+                "Credentials: server-managed PennKey token "
+                "(X-Canvas-Token / X-Canvas-URL headers still override per request)"
+            )
+        else:
+            log_info("Credentials: per-request via X-Canvas-Token / X-Canvas-URL headers")
     else:
         log_info(f"Starting Canvas MCP server with API URL: {config.canvas_api_url}")
 
@@ -348,7 +481,7 @@ def main() -> None:
 
     try:
         if is_http:
-            _run_http_server(mcp)
+            _run_http_server(mcp, access_key=http_access_key)
         else:
             mcp.run()
     except KeyboardInterrupt:
@@ -368,13 +501,13 @@ def main() -> None:
         log_info("Server stopped")
 
 
-def _run_http_server(mcp: FastMCP) -> None:
+def _run_http_server(mcp: FastMCP, access_key: str = "") -> None:
     """Run the MCP server with HTTP transport and credential middleware."""
     import uvicorn
 
     # Get the Starlette app from FastMCP, then wrap with credential middleware
     starlette_app = mcp.streamable_http_app()
-    app = CanvasCredentialMiddleware(starlette_app)
+    app = CanvasCredentialMiddleware(starlette_app, access_key=access_key)
 
     config = uvicorn.Config(
         app,
