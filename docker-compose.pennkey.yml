@@ -1,0 +1,77 @@
+# Canvas MCP with automated PennKey + Duo sign-in (web-session auth).
+#
+#   mkdir -p secrets && printf '%s' 'your-pennkey' > secrets/pennkey_username \
+#     && printf '%s' 'your-password' > secrets/pennkey_password \
+#     && openssl rand -hex 32 > secrets/mcp_api_key
+#   # The container runs as a non-root user and Compose mounts these files with
+#   # their host owner/mode, so make them readable and lock the folder instead:
+#   chmod 700 secrets && chmod 644 secrets/*
+#   docker compose -f docker-compose.pennkey.yml up -d --build
+#   docker compose -f docker-compose.pennkey.yml logs -f   # shows the Duo code to enter
+#
+# MCP endpoint: http://<bind address>:8819/mcp, API key required, sent as
+# ?api_key=<key> in the URL, "X-API-Key: <key>", or "Authorization: [Bearer] <key>".
+# TLS is expected to be
+# terminated by your own reverse proxy. By default the port is published on
+# 127.0.0.1 only; set MCP_BIND_ADDRESS=0.0.0.0 if the proxy runs on another
+# host, and MCP_PORT to change the host port.
+#
+# The Canvas session and browser cookies (incl. Duo "remember this device")
+# are kept in the canvas-auth volume, so restarts reuse them and re-login is
+# usually prompt-free.
+#
+# High availability: run this same setup on several hosts and put them behind
+# one Cloudflare Tunnel. Put the tunnel's token in .env as TUNNEL_TOKEN=... and
+# start with --profile tunnel; each host's cloudflared joins the tunnel as a
+# replica and forwards to http://canvas-mcp:8819. MCP_STATELESS_HTTP keeps no
+# per-client state in the server, so any replica can answer any request.
+services:
+  canvas-mcp:
+    build:
+      context: .
+      args:
+        WITH_PENNKEY_AUTH: "true"
+    command: ["canvas-mcp-server", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8819"]
+    ports:
+      - "${MCP_BIND_ADDRESS:-127.0.0.1}:${MCP_PORT:-8819}:8819"
+    environment:
+      CANVAS_AUTH_MODE: pennkey
+      CANVAS_API_URL: https://canvas.upenn.edu/api/v1
+      PENNKEY_USERNAME_FILE: /run/secrets/pennkey_username
+      PENNKEY_PASSWORD_FILE: /run/secrets/pennkey_password
+      MCP_API_KEY_FILE: /run/secrets/mcp_api_key
+      DUO_FACTOR: push
+      MCP_STATELESS_HTTP: "true"
+      # Optional: get the Duo code / login failures as a push notification.
+      # Set it in a .env file next to this compose file (git-ignored), e.g.
+      # AUTH_NOTIFY_WEBHOOK_URL=https://api.day.app/<bark-device-key>   (Bark)
+      # AUTH_NOTIFY_WEBHOOK_URL=https://ntfy.sh/<private-topic>         (ntfy)
+      AUTH_NOTIFY_WEBHOOK_URL: ${AUTH_NOTIFY_WEBHOOK_URL:-}
+    secrets:
+      - pennkey_username
+      - pennkey_password
+      - mcp_api_key
+    volumes:
+      - canvas-auth:/data
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - canvas-mcp
+    restart: unless-stopped
+
+secrets:
+  pennkey_username:
+    file: ./secrets/pennkey_username
+  pennkey_password:
+    file: ./secrets/pennkey_password
+  mcp_api_key:
+    file: ./secrets/mcp_api_key
+
+volumes:
+  canvas-auth:
