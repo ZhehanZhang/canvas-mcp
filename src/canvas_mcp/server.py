@@ -152,6 +152,10 @@ def create_server(
     if transport != "stdio":
         kwargs["host"] = host
         kwargs["port"] = port
+        # Stateless HTTP keeps no per-client session in memory, so any replica
+        # behind a load balancer or Cloudflare Tunnel can answer any request.
+        if os.getenv("MCP_STATELESS_HTTP", "").strip().lower() in ("1", "true", "yes", "on"):
+            kwargs["stateless_http"] = True
     mcp = FastMCP(**kwargs)
     return mcp
 

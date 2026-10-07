@@ -19,6 +19,12 @@
 # The Canvas session and browser cookies (incl. Duo "remember this device")
 # are kept in the canvas-auth volume, so restarts reuse them and re-login is
 # usually prompt-free.
+#
+# High availability: run this same setup on several hosts and put them behind
+# one Cloudflare Tunnel. Put the tunnel's token in .env as TUNNEL_TOKEN=... and
+# start with --profile tunnel; each host's cloudflared joins the tunnel as a
+# replica and forwards to http://canvas-mcp:8819. MCP_STATELESS_HTTP keeps no
+# per-client state in the server, so any replica can answer any request.
 services:
   canvas-mcp:
     build:
@@ -35,6 +41,7 @@ services:
       PENNKEY_PASSWORD_FILE: /run/secrets/pennkey_password
       MCP_API_KEY_FILE: /run/secrets/mcp_api_key
       DUO_FACTOR: push
+      MCP_STATELESS_HTTP: "true"
       # Optional: get the Duo code / login failures as a push notification.
       # Set it in a .env file next to this compose file (git-ignored), e.g.
       # AUTH_NOTIFY_WEBHOOK_URL=https://api.day.app/<bark-device-key>   (Bark)
@@ -46,6 +53,16 @@ services:
       - mcp_api_key
     volumes:
       - canvas-auth:/data
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - canvas-mcp
     restart: unless-stopped
 
 secrets:

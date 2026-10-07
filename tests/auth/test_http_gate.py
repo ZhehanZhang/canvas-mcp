@@ -85,3 +85,13 @@ async def test_gate_accepts_bare_authorization_header():
     mw = CanvasCredentialMiddleware(_ok_app, access_key="s3cret")
     assert (await _call(mw, [(b"authorization", b"s3cret")]))[0]["status"] == 200
     assert (await _call(mw, [(b"authorization", b"Basic s3cret")]))[0]["status"] == 401
+
+
+def test_stateless_http_opt_in(monkeypatch):
+    from canvas_mcp.server import create_server
+
+    monkeypatch.delenv("MCP_STATELESS_HTTP", raising=False)
+    assert create_server(transport="streamable-http").settings.stateless_http is False
+    monkeypatch.setenv("MCP_STATELESS_HTTP", "true")
+    assert create_server(transport="streamable-http").settings.stateless_http is True
+    assert create_server(transport="stdio").settings.stateless_http is False
