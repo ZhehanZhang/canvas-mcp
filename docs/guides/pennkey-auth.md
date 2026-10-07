@@ -80,6 +80,24 @@ docker compose -f docker-compose.pennkey.yml run --rm canvas-mcp canvas-mcp-serv
 The `canvas-auth` volume keeps the session and browser cookies, including
 Duo's "remember this device", across restarts.
 
+### Several hosts behind a Cloudflare Tunnel
+
+For high availability, run the same Docker setup on each host and join them
+all to one Cloudflare Tunnel whose public hostname points at
+`http://canvas-mcp:8819`. Put the tunnel token in `.env` as `TUNNEL_TOKEN=...`
+and start with the `tunnel` profile:
+
+```bash
+docker compose -f docker-compose.pennkey.yml --profile tunnel up -d --build
+```
+
+Each host's `cloudflared` registers as a replica, and Cloudflare sends
+traffic to a healthy one. The compose file sets `MCP_STATELESS_HTTP=true` so
+no replica holds per-client MCP state. Use the same `mcp_api_key` on every
+host. To avoid a separate Duo prompt per host, copy `canvas_session.json` and
+`browser_state.json` from one host's `canvas-auth` volume to the others
+before starting them.
+
 ## Without Docker
 
 ```bash
@@ -115,6 +133,7 @@ canvas-mcp-server --config    # shows auth mode and whether a session is saved
 | `PENNKEY_DEBUG` | `false` | Save a screenshot (and Duo page HTML) at every Duo step |
 | `PENNKEY_LOGIN_COOLDOWN_SEC` | `900` | Pause after a failed login |
 | `AUTH_NOTIFY_WEBHOOK_URL` / `_FILE` | | Optional push when a Duo code is waiting or login fails. `https://api.day.app/<device-key>` sends via Bark; other URLs get JSON `{text, content}` (Slack/Discord/ntfy) |
+| `MCP_STATELESS_HTTP` | `false` (`true` in the compose file) | Serve MCP over HTTP without per-client sessions, for multiple replicas |
 | `MCP_API_KEY` / `_FILE` | | API key required for HTTP transport: `?api_key=`, `X-API-Key`, or `Authorization` (`MCP_HTTP_AUTH_TOKEN` also accepted) |
 
 ## Troubleshooting
