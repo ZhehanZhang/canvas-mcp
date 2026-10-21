@@ -45,6 +45,7 @@ Personal academic tracking using Canvas "self" endpoints. Students only see thei
 | `get_my_upcoming_assignments` | Assignments due in next N days |
 | `get_my_todo_items` | Canvas TODO list |
 | `get_my_submission_status` | What's submitted vs missing |
+| `get_my_submissions` | Your own grades, instructor comments and rubric feedback in a course |
 | `get_my_course_grades` | Current grades across courses |
 | `get_my_peer_reviews_todo` | Pending peer reviews to complete |
 

@@ -15,6 +15,33 @@ from ..core.dates import format_date, parse_date
 from ..core.validation import validate_params
 
 
+def _format_rubric_assessment(assessment: dict | None, rubric: list | None) -> list[str]:
+    """Format a rubric_assessment dict, labelled with the assignment's rubric when available."""
+    if not assessment:
+        return ["  Rubric: No rubric assessment"]
+
+    criteria = {c.get("id"): c for c in rubric or [] if isinstance(c, dict)}
+    order = [c.get("id") for c in rubric or [] if isinstance(c, dict) and c.get("id") in assessment]
+    order += [cid for cid in assessment if cid not in order]
+
+    lines = ["  Rubric:"]
+    for criterion_id in order:
+        result = assessment.get(criterion_id) or {}
+        criterion = criteria.get(criterion_id, {})
+        label = criterion.get("description") or f"Criterion {criterion_id}"
+        points = result.get("points")
+        possible = criterion.get("points")
+        score = "no score" if points is None else (f"{points} / {possible}" if possible is not None else f"{points}")
+        rating = next(
+            (r.get("description") for r in criterion.get("ratings") or [] if r.get("id") == result.get("rating_id")),
+            None,
+        )
+        lines.append(f"    - {label}: {score}" + (f" ({rating})" if rating else ""))
+        if result.get("comments"):
+            lines.append(f"      Comment: {result['comments'].strip()}")
+    return lines
+
+
 def register_student_tools(mcp: FastMCP):
     """Register student-specific MCP tools."""
 
@@ -198,6 +225,119 @@ def register_student_tools(mcp: FastMCP):
                     f"  {f'Course: {course_name}' if course_name else ''}\n"
                     f"  Submitted: {submitted_at}\n"
                 )
+
+        return "\n".join(output_lines)
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    @validate_params
+    async def get_my_submissions(
+        course_identifier: str | int,
+        assignment_ids: list[str | int] | None = None,
+        include_comments: bool = True,
+        include_rubric: bool = True,
+    ) -> str:
+        """Get your own submissions in a course with grades, instructor comments and rubric feedback.
+
+        Works with a student login (uses student_ids[]=self), unlike list_submissions
+        and get_rubric_assessment, which need grading rights.
+
+        Args:
+            course_identifier: Course code or Canvas ID
+            assignment_ids: Assignment IDs to limit to (omit for every assignment)
+            include_comments: Include submission comments (default: True)
+            include_rubric: Include rubric assessment scores and comments (default: True)
+        """
+        course_id = await get_course_id(course_identifier)
+
+        includes = ["assignment"]
+        if include_comments:
+            includes.append("submission_comments")
+        if include_rubric:
+            includes.append("rubric_assessment")
+
+        params: dict = {"student_ids[]": ["self"], "include[]": includes, "per_page": 100}
+        if assignment_ids:
+            params["assignment_ids[]"] = [str(a) for a in assignment_ids]
+
+        submissions = await fetch_all_paginated_results(
+            f"/courses/{course_id}/students/submissions", params
+        )
+
+        if isinstance(submissions, dict) and "error" in submissions:
+            return f"Error fetching your submissions: {submissions['error']}"
+
+        course_display = await get_course_code(course_id) or course_identifier
+
+        if not submissions:
+            return f"No submissions found for you in {course_display}."
+
+        submissions = sorted(
+            submissions,
+            key=lambda s: parse_date((s.get("assignment") or {}).get("due_at"))
+            or datetime.max.replace(tzinfo=timezone.utc),
+        )
+
+        if include_rubric:
+            # Label rubric scores with criterion names when the embedded assignment lacks its rubric
+            for submission in submissions:
+                assignment = submission.get("assignment") or {}
+                if submission.get("rubric_assessment") and not assignment.get("rubric"):
+                    details = await make_canvas_request(
+                        "get", f"/courses/{course_id}/assignments/{submission.get('assignment_id')}"
+                    )
+                    if isinstance(details, dict) and "error" not in details:
+                        submission["assignment"] = {**details, **assignment, "rubric": details.get("rubric")}
+
+        output_lines = [f"Your Submissions in {course_display}:\n"]
+
+        for submission in submissions:
+            assignment = submission.get("assignment") or {}
+            name = assignment.get("name") or f"Assignment {submission.get('assignment_id')}"
+            points_possible = assignment.get("points_possible")
+
+            lines = [f"• {name} (assignment {submission.get('assignment_id')})"]
+            if assignment.get("due_at"):
+                lines.append(f"  Due: {format_date(assignment.get('due_at'))}")
+
+            if submission.get("submitted_at"):
+                lines.append(f"  Submitted: {format_date(submission.get('submitted_at'))}")
+            else:
+                lines.append("  Submitted: Not submitted")
+
+            flags = [flag for flag in ("late", "missing", "excused") if submission.get(flag)]
+            state = submission.get("workflow_state", "unknown")
+            lines.append(f"  Status: {state}" + (f" ({', '.join(flags)})" if flags else ""))
+
+            score = submission.get("score")
+            if score is not None:
+                out_of = f" / {points_possible}" if points_possible is not None else ""
+                grade = submission.get("grade")
+                grade_text = f" (grade: {grade})" if grade not in (None, "", str(score)) else ""
+                lines.append(f"  Score: {score}{out_of}{grade_text}")
+            else:
+                lines.append("  Score: Not graded or not posted yet")
+
+            if include_rubric:
+                lines.extend(_format_rubric_assessment(
+                    submission.get("rubric_assessment"), assignment.get("rubric")
+                ))
+
+            if include_comments:
+                comments = submission.get("submission_comments") or []
+                if comments:
+                    lines.append(f"  Comments ({len(comments)}):")
+                    for comment in sorted(comments, key=lambda c: c.get("created_at") or ""):
+                        author = comment.get("author_name") or "Unknown"
+                        when = format_date(comment.get("created_at"))
+                        text = (comment.get("comment") or "").strip()
+                        lines.append(f"    - {author} ({when}): {text}")
+                        for attachment in comment.get("attachments") or []:
+                            label = attachment.get("display_name") or attachment.get("filename") or "file"
+                            lines.append(f"      Attachment: {label} {attachment.get('url', '')}".rstrip())
+                else:
+                    lines.append("  Comments: None")
+
+            output_lines.append("\n".join(lines) + "\n")
 
         return "\n".join(output_lines)
 

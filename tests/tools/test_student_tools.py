@@ -315,3 +315,132 @@ class TestStudentToolsDatetimeComparison:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestGetMySubmissions:
+    """Tests for get_my_submissions (own submissions with comments and rubric)."""
+
+    RUBRIC = [
+        {
+            "id": "c1",
+            "description": "Analysis",
+            "points": 10,
+            "ratings": [{"id": "r1", "description": "Excellent", "points": 10}],
+        },
+        {"id": "c2", "description": "Writing", "points": 5, "ratings": []},
+    ]
+
+    def _submission(self, **overrides):
+        submission = {
+            "assignment_id": 14842738,
+            "workflow_state": "graded",
+            "submitted_at": "2026-10-01T12:00:00Z",
+            "score": 13,
+            "grade": "13",
+            "late": False,
+            "missing": False,
+            "assignment": {
+                "name": "Case Memo 1",
+                "points_possible": 15,
+                "due_at": "2026-10-01T23:59:00Z",
+                "rubric": self.RUBRIC,
+            },
+            "rubric_assessment": {
+                "c1": {"points": 10, "rating_id": "r1", "comments": "Sharp analysis"},
+                "c2": {"points": 3, "comments": "Tighten the prose"},
+            },
+            "submission_comments": [
+                {
+                    "author_name": "Prof. Lee",
+                    "created_at": "2026-10-03T10:00:00Z",
+                    "comment": "Nice work overall.",
+                    "attachments": [{"display_name": "markup.pdf", "url": "https://x/markup.pdf"}],
+                }
+            ],
+        }
+        submission.update(overrides)
+        return submission
+
+    @pytest.mark.asyncio
+    async def test_returns_comments_and_rubric(self):
+        func = get_student_tool_function("get_my_submissions")
+        with patch('canvas_mcp.tools.student_tools.get_course_id', new_callable=AsyncMock) as mock_id, \
+             patch('canvas_mcp.tools.student_tools.get_course_code', new_callable=AsyncMock) as mock_code, \
+             patch('canvas_mcp.tools.student_tools.fetch_all_paginated_results', new_callable=AsyncMock) as mock_fetch:
+            mock_id.return_value = "1946900"
+            mock_code.return_value = "MGMT-1010"
+            mock_fetch.return_value = [self._submission()]
+
+            result = await func(course_identifier="1946900", assignment_ids="14842738,14842631")
+
+        endpoint, params = mock_fetch.call_args.args
+        assert endpoint == "/courses/1946900/students/submissions"
+        assert params["student_ids[]"] == ["self"]
+        assert params["assignment_ids[]"] == ["14842738", "14842631"]
+        assert {"submission_comments", "rubric_assessment", "assignment"} <= set(params["include[]"])
+
+        assert "Case Memo 1" in result
+        assert "Score: 13 / 15" in result
+        assert "Analysis: 10 / 10 (Excellent)" in result
+        assert "Comment: Sharp analysis" in result
+        assert "Writing: 3 / 5" in result
+        assert "Prof. Lee" in result and "Nice work overall." in result
+        assert "markup.pdf" in result
+
+    @pytest.mark.asyncio
+    async def test_api_error(self):
+        func = get_student_tool_function("get_my_submissions")
+        with patch('canvas_mcp.tools.student_tools.get_course_id', new_callable=AsyncMock) as mock_id, \
+             patch('canvas_mcp.tools.student_tools.fetch_all_paginated_results', new_callable=AsyncMock) as mock_fetch:
+            mock_id.return_value = "1"
+            mock_fetch.return_value = {"error": "HTTP error: 401"}
+
+            result = await func(course_identifier="1")
+
+        assert "Error fetching your submissions" in result
+        assert "401" in result
+
+    @pytest.mark.asyncio
+    async def test_empty_and_ungraded(self):
+        func = get_student_tool_function("get_my_submissions")
+        with patch('canvas_mcp.tools.student_tools.get_course_id', new_callable=AsyncMock) as mock_id, \
+             patch('canvas_mcp.tools.student_tools.get_course_code', new_callable=AsyncMock) as mock_code, \
+             patch('canvas_mcp.tools.student_tools.fetch_all_paginated_results', new_callable=AsyncMock) as mock_fetch:
+            mock_id.return_value = "1"
+            mock_code.return_value = "C1"
+
+            mock_fetch.return_value = []
+            assert "No submissions found" in await func(course_identifier="1")
+
+            mock_fetch.return_value = [self._submission(
+                score=None, grade=None, submitted_at=None, missing=True,
+                workflow_state="unsubmitted", rubric_assessment=None, submission_comments=[],
+            )]
+            result = await func(course_identifier="1")
+
+        assert "Not submitted" in result
+        assert "(missing)" in result
+        assert "Not graded" in result
+        assert "No rubric assessment" in result
+        assert "Comments: None" in result
+
+    @pytest.mark.asyncio
+    async def test_fetches_rubric_when_missing_from_assignment(self):
+        func = get_student_tool_function("get_my_submissions")
+        submission = self._submission()
+        submission["assignment"] = {"name": "Case Memo 1", "points_possible": 15}
+        with patch('canvas_mcp.tools.student_tools.get_course_id', new_callable=AsyncMock) as mock_id, \
+             patch('canvas_mcp.tools.student_tools.get_course_code', new_callable=AsyncMock) as mock_code, \
+             patch('canvas_mcp.tools.student_tools.fetch_all_paginated_results', new_callable=AsyncMock) as mock_fetch, \
+             patch('canvas_mcp.tools.student_tools.make_canvas_request', new_callable=AsyncMock) as mock_request:
+            mock_id.return_value = "1"
+            mock_code.return_value = "C1"
+            mock_fetch.return_value = [submission]
+            mock_request.return_value = {"id": 14842738, "rubric": self.RUBRIC}
+
+            result = await func(course_identifier="1", include_comments=False)
+
+        mock_request.assert_awaited_once_with("get", "/courses/1/assignments/14842738")
+        assert "submission_comments" not in mock_fetch.call_args.args[1]["include[]"]
+        assert "Analysis: 10 / 10 (Excellent)" in result
+        assert "Comments" not in result

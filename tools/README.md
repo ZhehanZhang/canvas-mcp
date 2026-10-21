@@ -64,6 +64,25 @@ Check your submission status across assignments.
 
 ---
 
+#### `get_my_submissions`
+Read your own submissions in a course, including instructor comments and rubric feedback. Uses `GET /courses/:id/students/submissions?student_ids[]=self`, so it works with a student login (unlike `list_submissions` and `get_rubric_assessment`, which need grading rights).
+
+**Parameters:**
+- `course_identifier` (required): Course code or ID
+- `assignment_ids` (optional): List or comma-separated assignment IDs to limit to (default: all)
+- `include_comments` (optional): Include submission comments (default: true)
+- `include_rubric` (optional): Include rubric scores, ratings and criterion comments (default: true)
+
+**Example:**
+```
+"What did my instructor say about my last memo?"
+"Show my rubric feedback for assignments 14842738 and 14842631"
+```
+
+**Returns:** Per assignment: submission time, status (late/missing/excused), score, rubric criteria with points, rating and comments, and every submission comment with author, time and attachments.
+
+---
+
 ### Academic Performance
 
 #### `get_my_course_grades`
