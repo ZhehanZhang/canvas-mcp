@@ -544,7 +544,7 @@ def register_rubric_tools(mcp: FastMCP) -> None:
     async def get_rubric_assessment(course_identifier: str | int,
                                              assignment_id: str | int,
                                              user_id: str | int) -> str:
-        """Get rubric assessment scores for a specific submission.
+        """Get rubric assessment scores for a specific submission (students use get_my_submissions).
 
         Args:
             course_identifier: Course code or Canvas ID

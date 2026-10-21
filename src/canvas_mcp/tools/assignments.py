@@ -303,7 +303,7 @@ def register_educator_assignment_tools(mcp: FastMCP):
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @validate_params
     async def list_submissions(course_identifier: str | int, assignment_id: str | int) -> str:
-        """List submissions for a specific assignment.
+        """List submissions for a specific assignment (instructor view; students use get_my_submissions).
 
         Args:
             course_identifier: Course code or Canvas ID

@@ -75,6 +75,42 @@
       ]
     },
     {
+      "name": "get_my_submissions",
+      "category": "student",
+      "description": "Read your own submissions with grades, instructor comments and rubric feedback",
+      "parameters": [
+        {
+          "name": "course_identifier",
+          "type": "string | integer",
+          "required": true,
+          "description": "Course code or ID"
+        },
+        {
+          "name": "assignment_ids",
+          "type": "array",
+          "required": false,
+          "description": "Assignment IDs to limit to (default: all)"
+        },
+        {
+          "name": "include_comments",
+          "type": "boolean",
+          "required": false,
+          "description": "Include submission comments (default: true)"
+        },
+        {
+          "name": "include_rubric",
+          "type": "boolean",
+          "required": false,
+          "description": "Include rubric assessment (default: true)"
+        }
+      ],
+      "returns": "Score, status, rubric criteria scores and comments, and submission comments per assignment",
+      "examples": [
+        "What did my instructor say about my last memo?",
+        "Show my rubric feedback for assignment 14842738"
+      ]
+    },
+    {
       "name": "get_my_course_grades",
       "category": "student",
       "description": "View your current grades across all enrolled courses",
