@@ -78,3 +78,68 @@ class TestCourseToolsIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def _get_list_courses():
+    from mcp.server.fastmcp import FastMCP
+
+    from canvas_mcp.tools.courses import register_course_tools
+
+    mcp = FastMCP("test")
+    captured = {}
+    original_tool = mcp.tool
+
+    def capturing_tool(*args, **kwargs):
+        decorator = original_tool(*args, **kwargs)
+
+        def wrapper(fn):
+            captured[fn.__name__] = fn
+            return decorator(fn)
+        return wrapper
+
+    mcp.tool = capturing_tool
+    register_course_tools(mcp)
+    return captured["list_courses"]
+
+
+class TestListCourses:
+    """list_courses must list a student's courses without extra flags."""
+
+    @pytest.mark.asyncio
+    async def test_lists_student_courses_by_default(self):
+        list_courses = _get_list_courses()
+        courses = [{
+            "id": 1946900, "name": "Writing Seminar", "course_code": "WRIT 0350",
+            "enrollments": [{"type": "StudentEnrollment"}],
+        }]
+        with patch('canvas_mcp.tools.courses.fetch_all_paginated_results', new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = courses
+            result = await list_courses()
+
+        params = mock_fetch.call_args.args[1]
+        assert "enrollment_type" not in params
+        assert params["state[]"] == ["available"]
+        assert "WRIT 0350" in result and "1946900" in result
+        assert "Role: student" in result
+
+    @pytest.mark.asyncio
+    async def test_teaching_only_filters_and_empty_message(self):
+        list_courses = _get_list_courses()
+        with patch('canvas_mcp.tools.courses.fetch_all_paginated_results', new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = []
+            result = await list_courses(teaching_only=True, include_concluded=True)
+
+        params = mock_fetch.call_args.args[1]
+        assert params["enrollment_type"] == "teacher"
+        assert params["state[]"] == ["available", "completed"]
+        assert result == "No courses you teach found."
+
+    @pytest.mark.asyncio
+    async def test_api_error(self):
+        list_courses = _get_list_courses()
+        with patch('canvas_mcp.tools.courses.fetch_all_paginated_results', new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = {"error": "HTTP error: 401"}
+            result = await list_courses(include_all=False)
+
+        assert "enrollment_type" not in mock_fetch.call_args.args[1]
+        assert result.startswith("Error fetching courses")

@@ -43,15 +43,25 @@ def register_course_tools(mcp: FastMCP):
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @validate_params
-    async def list_courses(include_concluded: bool = False, include_all: bool = False) -> str:
-        """List courses for the authenticated user."""
+    async def list_courses(
+        include_concluded: bool = False,
+        teaching_only: bool = False,
+        include_all: bool = True,
+    ) -> str:
+        """List your courses: every course you're enrolled in, as student, TA or teacher.
+
+        Args:
+            include_concluded: Also list completed courses (default: False)
+            teaching_only: Only courses you teach (default: False)
+            include_all: Deprecated, kept for older clients; all enrollments are listed by default
+        """
 
         params = {
             "include[]": ["term", "teachers", "total_students"],
             "per_page": 100
         }
 
-        if not include_all:
+        if teaching_only:
             params["enrollment_type"] = "teacher"
 
         if include_concluded:
@@ -65,7 +75,7 @@ def register_course_tools(mcp: FastMCP):
             return f"Error fetching courses: {courses['error']}"
 
         if not courses:
-            return "No courses found."
+            return "No courses you teach found." if teaching_only else "No courses found."
 
         # Refresh our caches with the course data
         for course in courses:
@@ -82,8 +92,15 @@ def register_course_tools(mcp: FastMCP):
             name = course.get("name", "Unnamed course")
             code = course.get("course_code", "No code")
 
+            roles = sorted({
+                str(e.get("type", "")).removesuffix("Enrollment").lower()
+                for e in course.get("enrollments") or []
+                if e.get("type")
+            })
+            role_line = f"Role: {', '.join(roles)}\n" if roles else ""
+
             # Emphasize code in the output
-            courses_info.append(f"Code: {code}\nName: {name}\nID: {course_id}\n")
+            courses_info.append(f"Code: {code}\nName: {name}\nID: {course_id}\n{role_line}")
 
         return "Courses:\n\n" + "\n".join(courses_info)
 
