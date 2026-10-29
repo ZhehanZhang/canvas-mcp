@@ -593,7 +593,11 @@ These tools work for both audiences, providing access to course content and info
 ### Course Management
 
 #### `list_courses`
-List all enrolled courses.
+List every course you're enrolled in (as student, TA or teacher), with your role in each.
+
+**Parameters:**
+- `include_concluded` (optional): Also list completed courses (default: false)
+- `teaching_only` (optional): Only courses you teach (default: false)
 
 **Example:**
 ```

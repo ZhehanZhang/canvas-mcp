@@ -502,8 +502,21 @@
     {
       "name": "list_courses",
       "category": "shared",
-      "description": "List all enrolled courses",
-      "parameters": [],
+      "description": "List all your courses (student, TA or teacher enrollments)",
+      "parameters": [
+        {
+          "name": "include_concluded",
+          "type": "boolean",
+          "required": false,
+          "description": "Also list completed courses (default: false)"
+        },
+        {
+          "name": "teaching_only",
+          "type": "boolean",
+          "required": false,
+          "description": "Only courses you teach (default: false)"
+        }
+      ],
       "returns": "List of courses with IDs, names, and codes",
       "examples": [
         "Show me my courses",
